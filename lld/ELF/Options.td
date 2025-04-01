@@ -381,6 +381,10 @@ defm pie: B<"pie",
     "Create a position independent executable",
     "Do not create a position independent executable (default)">;
 
+defm print_gc_deps: B<"print-gc-deps",
+    "Report the reasons for GC to keep sections",
+    "Do not report kept sections (default)">;
+
 defm print_gc_sections: B<"print-gc-sections",
     "List removed unused sections",
     "Do not list removed unused sections (default)">;

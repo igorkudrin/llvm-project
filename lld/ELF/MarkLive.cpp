@@ -42,6 +42,9 @@ using namespace lld;
 using namespace lld::elf;
 
 namespace {
+
+using OutFunc = llvm::function_ref<void(const ELFSyncStream &)>;
+
 template <class ELFT> class MarkLive {
 public:
   MarkLive(Ctx &ctx, unsigned partition) : ctx(ctx), partition(partition) {}
@@ -50,8 +53,8 @@ public:
   void moveToMain();
 
 private:
-  void enqueue(InputSectionBase *sec, uint64_t offset);
-  void markSymbol(Symbol *sym);
+  void enqueue(InputSectionBase *sec, uint64_t offset, OutFunc reason_fn);
+  void markSymbol(Symbol *sym, OutFunc reason_fn);
   void mark();
 
   template <class RelTy>
@@ -72,6 +75,11 @@ private:
   DenseMap<StringRef, SmallVector<InputSectionBase *, 0>> cNamedSections;
 };
 } // namespace
+
+static const ELFSyncStream &operator<<(const ELFSyncStream &s, OutFunc& fn) {
+  fn(s);
+  return s;
+}
 
 template <class ELFT>
 static uint64_t getAddend(Ctx &ctx, InputSectionBase &sec,
@@ -120,7 +128,13 @@ void MarkLive<ELFT>::resolveReloc(InputSectionBase &sec, RelTy &rel,
     // discarded, marking the LSDA will unnecessarily retain the text section.
     if (!(fromFDE && ((relSec->flags & (SHF_EXECINSTR | SHF_LINK_ORDER)) ||
                       relSec->nextInSectionGroup)))
-      enqueue(relSec, offset);
+      enqueue(relSec, offset, [&](const ELFSyncStream &s) {
+        s << "referenced by " << &sec;
+        if (sym.getName().empty())
+          s << " (no symbol name)";
+        else
+          s << ", symbol " << sym.getName();
+      });
     return;
   }
 
@@ -129,7 +143,9 @@ void MarkLive<ELFT>::resolveReloc(InputSectionBase &sec, RelTy &rel,
       cast<SharedFile>(ss->file)->isNeeded = true;
 
   for (InputSectionBase *sec : cNamedSections.lookup(sym.getName()))
-    enqueue(sec, 0);
+    enqueue(sec, 0, [&](const ELFSyncStream &s) {
+      s << "referenced by " << sec << ", symbol (C name) " << sym.getName();
+    });
 }
 
 // The .eh_frame section is an unfortunate special case.
@@ -187,12 +203,17 @@ static bool isReserved(InputSectionBase *sec) {
 }
 
 template <class ELFT>
-void MarkLive<ELFT>::enqueue(InputSectionBase *sec, uint64_t offset) {
+void MarkLive<ELFT>::enqueue(InputSectionBase *sec, uint64_t offset,
+                             OutFunc reason_fn) {
   // Usually, a whole section is marked as live or dead, but in mergeable
   // (splittable) sections, each piece of data has independent liveness bit.
   // So we explicitly tell it which offset is in use.
-  if (auto *ms = dyn_cast<MergeInputSection>(sec))
+  if (auto *ms = dyn_cast<MergeInputSection>(sec)) {
+    if (ctx.arg.printGcDeps && !ms->getSectionPiece(offset).live)
+      Msg(ctx) << sec << " [0x" << Twine::utohexstr(offset)
+               << "]: " << reason_fn;
     ms->getSectionPiece(offset).live = true;
+  }
 
   // Set Sec->Partition to the meet (i.e. the "minimum") of Partition and
   // Sec->Partition in the following lattice: 1 < other < 0. If Sec->Partition
@@ -201,15 +222,19 @@ void MarkLive<ELFT>::enqueue(InputSectionBase *sec, uint64_t offset) {
     return;
   sec->partition = sec->partition ? 1 : partition;
 
+  if (ctx.arg.printGcDeps && !isa<MergeInputSection>(sec))
+    Msg(ctx) << sec << ": " << reason_fn;
+
   // Add input section to the queue.
   if (InputSection *s = dyn_cast<InputSection>(sec))
     queue.push_back(s);
 }
 
-template <class ELFT> void MarkLive<ELFT>::markSymbol(Symbol *sym) {
+template <class ELFT>
+void MarkLive<ELFT>::markSymbol(Symbol *sym, OutFunc reason_fn) {
   if (auto *d = dyn_cast_or_null<Defined>(sym))
     if (auto *isec = dyn_cast_or_null<InputSectionBase>(d->section))
-      enqueue(isec, d->value);
+      enqueue(isec, d->value, reason_fn);
 }
 
 // This is the main function of the garbage collector.
@@ -222,7 +247,8 @@ template <class ELFT> void MarkLive<ELFT>::run() {
   // file can interpose other ELF file's symbols at runtime.
   for (Symbol *sym : ctx.symtab->getSymbols())
     if (sym->isExported && sym->partition == partition)
-      markSymbol(sym);
+      markSymbol(sym,
+                 [&](const ELFSyncStream &s) { s << "GC root (.dynsym)"; });
 
   // If this isn't the main partition, that's all that we need to preserve.
   if (partition != 1) {
@@ -230,16 +256,27 @@ template <class ELFT> void MarkLive<ELFT>::run() {
     return;
   }
 
-  markSymbol(ctx.symtab->find(ctx.arg.entry));
-  markSymbol(ctx.symtab->find(ctx.arg.init));
-  markSymbol(ctx.symtab->find(ctx.arg.fini));
+  markSymbol(ctx.symtab->find(ctx.arg.entry),
+             [&](const ELFSyncStream &s) { s << "GC root (entry)"; });
+  markSymbol(ctx.symtab->find(ctx.arg.init),
+             [&](const ELFSyncStream &s) { s << "GC root (init)"; });
+  markSymbol(ctx.symtab->find(ctx.arg.fini),
+             [&](const ELFSyncStream &s) { s << "GC root (fini)"; });
   for (StringRef s : ctx.arg.undefined)
-    markSymbol(ctx.symtab->find(s));
+    markSymbol(ctx.symtab->find(s),
+               [&](const ELFSyncStream &s) { s << "GC root (--undefined)"; });
   for (StringRef s : ctx.script->referencedSymbols)
-    markSymbol(ctx.symtab->find(s));
+    markSymbol(ctx.symtab->find(s), [&](const ELFSyncStream &s) {
+      s << "GC root (referenced in a linker script)";
+    });
   for (auto [symName, _] : ctx.symtab->cmseSymMap) {
-    markSymbol(ctx.symtab->cmseSymMap[symName].sym);
-    markSymbol(ctx.symtab->cmseSymMap[symName].acleSeSym);
+    markSymbol(
+        ctx.symtab->cmseSymMap[symName].sym,
+        [&](const ELFSyncStream &s) { s << "GC root (Arm CMSE symbol)"; });
+    markSymbol(ctx.symtab->cmseSymMap[symName].acleSeSym,
+               [&](const ELFSyncStream &s) {
+                 s << "GC root (Arm CMSE __acle_se symbol)";
+               });
   }
 
   // Mark .eh_frame sections as live because there are usually no relocations
@@ -256,7 +293,8 @@ template <class ELFT> void MarkLive<ELFT>::run() {
   }
   for (InputSectionBase *sec : ctx.inputSections) {
     if (sec->flags & SHF_GNU_RETAIN) {
-      enqueue(sec, 0);
+      enqueue(sec, 0,
+              [&](const ELFSyncStream &s) { s << "GC root (SHF_GNU_RETAIN)"; });
       continue;
     }
     if (sec->flags & SHF_LINK_ORDER)
@@ -295,7 +333,7 @@ template <class ELFT> void MarkLive<ELFT>::run() {
     // Preserve special sections and those which are specified in linker
     // script KEEP command.
     if (isReserved(sec) || ctx.script->shouldKeep(sec)) {
-      enqueue(sec, 0);
+      enqueue(sec, 0, [&](const ELFSyncStream &s) { s << "GC root (KEEP)"; });
     } else if ((!ctx.arg.zStartStopGC || sec->name.starts_with("__libc_")) &&
                isValidCIdentifier(sec->name)) {
       // As a workaround for glibc libc.a before 2.34
@@ -323,11 +361,13 @@ template <class ELFT> void MarkLive<ELFT>::mark() {
       resolveReloc(sec, rel, false);
 
     for (InputSectionBase *isec : sec.dependentSections)
-      enqueue(isec, 0);
-
+      enqueue(isec, 0, [&](const ELFSyncStream &s) {
+        s << "dependent section of " << &sec;
+      });
     // Mark the next group member.
     if (sec.nextInSectionGroup)
-      enqueue(sec.nextInSectionGroup, 0);
+      enqueue(sec.nextInSectionGroup, 0,
+              [&](const ELFSyncStream &s) { s << "same group as " << &sec; });
   }
 }
 
@@ -346,14 +386,18 @@ template <class ELFT> void MarkLive<ELFT>::moveToMain() {
       if (auto *d = dyn_cast<Defined>(s))
         if ((d->type == STT_GNU_IFUNC || d->type == STT_TLS) && d->section &&
             d->section->isLive())
-          markSymbol(s);
+          markSymbol(s, [&](const ELFSyncStream &s) {
+            s << "move to the main partition (ifunc or TLS)";
+          });
 
   for (InputSectionBase *sec : ctx.inputSections) {
     if (!sec->isLive() || !isValidCIdentifier(sec->name))
       continue;
     if (ctx.symtab->find(("__start_" + sec->name).str()) ||
         ctx.symtab->find(("__stop_" + sec->name).str()))
-      enqueue(sec, 0);
+      enqueue(sec, 0, [&](const ELFSyncStream &s) {
+        s << "move to the main partition (C name)";
+      });
   }
 
   mark();

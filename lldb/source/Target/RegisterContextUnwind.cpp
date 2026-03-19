@@ -2295,8 +2295,29 @@ bool RegisterContextUnwind::ReadRegister(const RegisterInfo *reg_info,
   lldb_private::UnwindLLDB::ConcreteRegisterLocation regloc;
   // Find out where the NEXT frame saved THIS frame's register contents
   if (!m_parent_unwind.SearchForSavedLocationForRegister(
-          lldb_regnum, regloc, m_frame_number - 1, is_pc_regnum))
+          lldb_regnum, regloc, m_frame_number - 1, is_pc_regnum)) {
+    if (reg_info->value_regs &&
+        reg_info->value_regs[0] != LLDB_INVALID_REGNUM &&
+        reg_info->value_regs[1] == LLDB_INVALID_REGNUM) {
+      const RegisterInfo *contained_reg_info =
+          GetRegisterInfoAtIndex(reg_info->value_regs[0]);
+      RegisterValue contained_value;
+      if (ReadRegister(contained_reg_info, contained_value)) {
+        std::vector<uint8_t> buf(contained_reg_info->byte_size);
+        Status error;
+        contained_value.GetAsMemoryData(*contained_reg_info, buf.data(),
+                                        buf.size(), eByteOrderLittle, error);
+        if (error.Fail())
+          return false;
+        value.SetFromMemoryData(*reg_info,
+                                buf.data() + reg_info->byte_offset -
+                                    contained_reg_info->byte_offset,
+                                reg_info->byte_size, eByteOrderLittle, error);
+        return error.Success();
+      }
+    }
     return false;
+  }
 
   bool result = ReadRegisterValueFromRegisterLocation(regloc, reg_info, value);
   if (result) {

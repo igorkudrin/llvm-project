@@ -1,4 +1,4 @@
-// RUN: %clang_cc1 -triple aarch64 -target-feature +mte -ast-dump %s | FileCheck %s
+// RUN: %clang_cc1 -triple aarch64 -target-feature +mte -ast-dump %s | tee %t.log | FileCheck %s
 
 #include <stddef.h>
 #include <arm_acle.h>

@@ -49,6 +49,11 @@ bool SemaARM::BuiltinARMMemoryTaggingCall(unsigned BuiltinID,
     if (!SecArgType->isIntegerType())
       return Diag(TheCall->getBeginLoc(), diag::err_memtag_arg_must_be_integer)
              << "second" << SecArgType << Arg1->getSourceRange();
+    SecArg = SemaRef.ImpCastExprToType(
+        SecArg.get(), Context.getIntTypeForBitwidth(64, /*Signed=*/false),
+        CK_IntegralCast);
+    if (SecArg.isInvalid())
+      return true;
     TheCall->setArg(1, SecArg.get());
 
     // Derive the return type from the pointer argument.
@@ -99,6 +104,11 @@ bool SemaARM::BuiltinARMMemoryTaggingCall(unsigned BuiltinID,
     if (!SecArgType->isIntegerType())
       return Diag(TheCall->getBeginLoc(), diag::err_memtag_arg_must_be_integer)
              << "second" << SecArgType << Arg1->getSourceRange();
+    SecArg = SemaRef.ImpCastExprToType(
+        SecArg.get(), Context.getIntTypeForBitwidth(64, /*Signed=*/false),
+        CK_IntegralCast);
+    if (SecArg.isInvalid())
+      return true;
     TheCall->setArg(1, SecArg.get());
 
     return false;

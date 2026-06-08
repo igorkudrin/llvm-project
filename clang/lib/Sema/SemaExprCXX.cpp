@@ -2719,9 +2719,9 @@ bool Sema::CheckAllocatedType(QualType AllocType, SourceLocation Loc,
 enum class ResolveMode { Typed, Untyped };
 static bool resolveAllocationOverloadInterior(
     Sema &S, LookupResult &R, SourceRange Range, ResolveMode Mode,
-    SmallVectorImpl<Expr *> &Args, AlignedAllocationMode &PassAlignment,
-    FunctionDecl *&Operator, OverloadCandidateSet *AlignedCandidates,
-    Expr *AlignArg, bool Diagnose) {
+    SmallVectorImpl<Expr *> &Args, Expr *AlignArg,
+    AlignedAllocationMode &PassAlignment, FunctionDecl *&Operator,
+    OverloadCandidateSet *AltCandidates, bool Diagnose) {
   unsigned NonTypeArgumentOffset = 0;
   if (Mode == ResolveMode::Typed) {
     ++NonTypeArgumentOffset;
@@ -2770,13 +2770,21 @@ static bool resolveAllocationOverloadInterior(
     //   If no matching function is found and the allocated object type has
     //   new-extended alignment, the alignment argument is removed from the
     //   argument list, and overload resolution is performed again.
-    if (isAlignedAllocation(PassAlignment)) {
-      PassAlignment = AlignedAllocationMode::No;
-      AlignArg = Args[NonTypeArgumentOffset + 1];
-      Args.erase(Args.begin() + NonTypeArgumentOffset + 1);
-      return resolveAllocationOverloadInterior(S, R, Range, Mode, Args,
-                                               PassAlignment, Operator,
-                                               &Candidates, AlignArg, Diagnose);
+    if (!AltCandidates) {
+      if (isAlignedAllocation(PassAlignment)) {
+        PassAlignment = AlignedAllocationMode::No;
+        assert(AlignArg == Args[NonTypeArgumentOffset + 1]);
+        Args.erase(Args.begin() + NonTypeArgumentOffset + 1);
+        return resolveAllocationOverloadInterior(
+            S, R, Range, Mode, Args, AlignArg, PassAlignment, Operator,
+            &Candidates, Diagnose);
+      } else if (S.getLangOpts().AlignedAllocation) {
+        PassAlignment = AlignedAllocationMode::Yes;
+        Args.insert(Args.begin() + NonTypeArgumentOffset + 1, AlignArg);
+        return resolveAllocationOverloadInterior(
+            S, R, Range, Mode, Args, AlignArg, PassAlignment, Operator,
+            &Candidates, Diagnose);
+      }
     }
 
     // MSVC will fall back on trying to find a matching global operator new
@@ -2791,10 +2799,9 @@ static bool resolveAllocationOverloadInterior(
       R.setLookupName(S.Context.DeclarationNames.getCXXOperatorName(OO_New));
       S.LookupQualifiedName(R, S.Context.getTranslationUnitDecl());
       // FIXME: This will give bad diagnostics pointing at the wrong functions.
-      return resolveAllocationOverloadInterior(S, R, Range, Mode, Args,
-                                               PassAlignment, Operator,
-                                               /*Candidates=*/nullptr,
-                                               /*AlignArg=*/nullptr, Diagnose);
+      return resolveAllocationOverloadInterior(
+          S, R, Range, Mode, Args, AlignArg, PassAlignment, Operator,
+          /*AltCandidates=*/nullptr, Diagnose);
     }
     if (Mode == ResolveMode::Typed) {
       // If we can't find a matching type aware operator we don't consider this
@@ -2832,9 +2839,9 @@ static bool resolveAllocationOverloadInterior(
       // For an aligned allocation, separately check the aligned and unaligned
       // candidates with their respective argument lists.
       SmallVector<OverloadCandidate*, 32> Cands;
-      SmallVector<OverloadCandidate*, 32> AlignedCands;
-      llvm::SmallVector<Expr*, 4> AlignedArgs;
-      if (AlignedCandidates) {
+      SmallVector<OverloadCandidate*, 32> AltCands;
+      llvm::SmallVector<Expr*, 4> AltArgs;
+      if (AltCandidates) {
         auto IsAligned = [NonTypeArgumentOffset](OverloadCandidate &C) {
           auto AlignArgOffset = NonTypeArgumentOffset + 1;
           return C.Function->getNumParams() > AlignArgOffset &&
@@ -2842,19 +2849,26 @@ static bool resolveAllocationOverloadInterior(
                      ->getType()
                      ->isAlignValT();
         };
-        auto IsUnaligned = [&](OverloadCandidate &C) { return !IsAligned(C); };
+        auto IsAlt = [&](OverloadCandidate &C) {
+          return isAlignedAllocation(PassAlignment) ? !IsAligned(C)
+                                                    : IsAligned(C);
+        };
+        auto IsCur = [&](OverloadCandidate &C) { return !IsAlt(C); };
 
-        AlignedArgs.reserve(Args.size() + NonTypeArgumentOffset + 1);
+        AltArgs.reserve(Args.size() + NonTypeArgumentOffset + 1);
         for (unsigned Idx = 0; Idx < NonTypeArgumentOffset + 1; ++Idx)
-          AlignedArgs.push_back(Args[Idx]);
-        AlignedArgs.push_back(AlignArg);
-        AlignedArgs.append(Args.begin() + NonTypeArgumentOffset + 1,
-                           Args.end());
-        AlignedCands = AlignedCandidates->CompleteCandidates(
-            S, OCD_AllCandidates, AlignedArgs, R.getNameLoc(), IsAligned);
+          AltArgs.push_back(Args[Idx]);
+        if (isAlignedAllocation(PassAlignment)) {
+          AltArgs.append(Args.begin() + NonTypeArgumentOffset + 2, Args.end());
+        } else {
+          AltArgs.push_back(AlignArg);
+          AltArgs.append(Args.begin() + NonTypeArgumentOffset + 1, Args.end());
+        }
+        AltCands = AltCandidates->CompleteCandidates(
+            S, OCD_AllCandidates, AltArgs, R.getNameLoc(), IsAlt);
 
         Cands = Candidates.CompleteCandidates(S, OCD_AllCandidates, Args,
-                                              R.getNameLoc(), IsUnaligned);
+                                              R.getNameLoc(), IsCur);
       } else {
         Cands = Candidates.CompleteCandidates(S, OCD_AllCandidates, Args,
                                               R.getNameLoc());
@@ -2862,9 +2876,8 @@ static bool resolveAllocationOverloadInterior(
 
       S.Diag(R.getNameLoc(), diag::err_ovl_no_viable_function_in_call)
           << R.getLookupName() << Range;
-      if (AlignedCandidates)
-        AlignedCandidates->NoteCandidates(S, AlignedArgs, AlignedCands, "",
-                                          R.getNameLoc());
+      if (AltCandidates)
+        AltCandidates->NoteCandidates(S, AltArgs, AltCands, "", R.getNameLoc());
       Candidates.NoteCandidates(S, Args, Cands, "", R.getNameLoc());
     }
     return true;
@@ -2909,10 +2922,12 @@ static void LookupGlobalDeallocationFunctions(Sema &S, SourceLocation Loc,
   }
 }
 
-static bool resolveAllocationOverload(
-    Sema &S, LookupResult &R, SourceRange Range, SmallVectorImpl<Expr *> &Args,
-    ImplicitAllocationParameters &IAP, FunctionDecl *&Operator,
-    OverloadCandidateSet *AlignedCandidates, Expr *AlignArg, bool Diagnose) {
+static bool resolveAllocationOverload(Sema &S, LookupResult &R,
+                                      SourceRange Range,
+                                      SmallVectorImpl<Expr *> &Args,
+                                      Expr *AlignArg,
+                                      ImplicitAllocationParameters &IAP,
+                                      FunctionDecl *&Operator, bool Diagnose) {
   Operator = nullptr;
   if (isTypeAwareAllocation(IAP.PassTypeIdentity)) {
     assert(S.isStdTypeIdentity(Args[0]->getType(), nullptr));
@@ -2932,9 +2947,9 @@ static bool resolveAllocationOverload(
 
     AlignedAllocationMode InitialAlignmentMode = IAP.PassAlignment;
     IAP.PassAlignment = AlignedAllocationMode::Yes;
-    if (resolveAllocationOverloadInterior(
-            S, R, Range, ResolveMode::Typed, Args, IAP.PassAlignment, Operator,
-            AlignedCandidates, AlignArg, Diagnose))
+    if (resolveAllocationOverloadInterior(S, R, Range, ResolveMode::Typed, Args,
+                                          AlignArg, IAP.PassAlignment, Operator,
+                                          /*AltCandidates=*/nullptr, Diagnose))
       return true;
     if (Operator)
       return false;
@@ -2947,9 +2962,10 @@ static bool resolveAllocationOverload(
     Args = std::move(UntypedParameters);
   }
   assert(!S.isStdTypeIdentity(Args[0]->getType(), nullptr));
-  return resolveAllocationOverloadInterior(
-      S, R, Range, ResolveMode::Untyped, Args, IAP.PassAlignment, Operator,
-      AlignedCandidates, AlignArg, Diagnose);
+  return resolveAllocationOverloadInterior(S, R, Range, ResolveMode::Untyped,
+                                           Args, AlignArg, IAP.PassAlignment,
+                                           Operator,
+                                           /*AltCandidates=*/nullptr, Diagnose);
 }
 
 bool Sema::FindAllocationFunctions(
@@ -3018,7 +3034,7 @@ bool Sema::FindAllocationFunctions(
   QualType AlignValT = Context.VoidTy;
   bool IncludeAlignParam = isAlignedAllocation(IAP.PassAlignment) ||
                            isTypeAwareAllocation(IAP.PassTypeIdentity);
-  if (IncludeAlignParam) {
+  if (IncludeAlignParam || getLangOpts().AlignedAllocation) {
     DeclareGlobalNewDelete();
     AlignValT = Context.getCanonicalTagType(getStdAlignValT());
   }
@@ -3071,9 +3087,8 @@ bool Sema::FindAllocationFunctions(
     // We do our own custom access checks below.
     R.suppressDiagnostics();
 
-    if (resolveAllocationOverload(*this, R, Range, AllocArgs, IAP, OperatorNew,
-                                  /*Candidates=*/nullptr,
-                                  /*AlignArg=*/nullptr, Diagnose))
+    if (resolveAllocationOverload(*this, R, Range, AllocArgs, &Align, IAP,
+                                  OperatorNew, Diagnose))
       return true;
   }
 

@@ -2778,7 +2778,7 @@ static bool resolveAllocationOverloadInterior(
         return resolveAllocationOverloadInterior(
             S, R, Range, Mode, Args, AlignArg, PassAlignment, Operator,
             &Candidates, Diagnose);
-      } else if (S.getLangOpts().AlignedAllocation) {
+      } else if (S.getLangOpts().AlignedAllocation && S.getStdAlignValT()) {
         PassAlignment = AlignedAllocationMode::Yes;
         Args.insert(Args.begin() + NonTypeArgumentOffset + 1, AlignArg);
         return resolveAllocationOverloadInterior(
@@ -3038,7 +3038,8 @@ bool Sema::FindAllocationFunctions(
                            isTypeAwareAllocation(IAP.PassTypeIdentity);
   if (IncludeAlignParam || getLangOpts().AlignedAllocation) {
     DeclareGlobalNewDelete();
-    AlignValT = Context.getCanonicalTagType(getStdAlignValT());
+    if (EnumDecl *StdAlignValT = getStdAlignValT())
+      AlignValT = Context.getCanonicalTagType(StdAlignValT);
   }
   CXXScalarValueInitExpr Align(AlignValT, nullptr, SourceLocation());
   if (IncludeAlignParam)

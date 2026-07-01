@@ -2401,6 +2401,12 @@ public:
 
   /// @}
 
+  virtual MachineInstr *EmitCFGuardCheck(MachineBasicBlock &MBB,
+                                      MachineBasicBlock::instr_iterator &MBBI,
+                                      const TargetInstrInfo *TII) const {
+    llvm_unreachable("not supported");
+  }
+
   /// Inserts in the IR a target-specific intrinsic specifying a fence.
   /// It is called by AtomicExpandPass before expanding an
   ///   AtomicRMW/AtomicCmpXchg/AtomicStore/AtomicLoad
@@ -4869,6 +4875,7 @@ public:
     const ConstantInt *CFIType = nullptr;
     SDValue ConvergenceControlToken;
     GlobalValue *DeactivationSymbol = nullptr;
+    SDValue ChainCallCFGuardTarget;
 
     std::optional<PtrAuthInfo> PAI;
 
@@ -5024,6 +5031,11 @@ public:
 
     CallLoweringInfo &setDeactivationSymbol(GlobalValue *Sym) {
       DeactivationSymbol = Sym;
+      return *this;
+    }
+
+    CallLoweringInfo &setChainCallCFGuardTarget(SDValue Target) {
+      ChainCallCFGuardTarget = Target;
       return *this;
     }
 

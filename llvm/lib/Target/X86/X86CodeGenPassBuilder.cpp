@@ -18,6 +18,7 @@
 #include "llvm/CodeGen/AtomicExpand.h"
 #include "llvm/CodeGen/BreakFalseDeps.h"
 #include "llvm/CodeGen/EarlyIfConversion.h"
+#include "llvm/CodeGen/CFGuardCheckExpand.h"
 #include "llvm/CodeGen/IndirectBrExpand.h"
 #include "llvm/CodeGen/InterleavedAccess.h"
 #include "llvm/CodeGen/JMCInstrumenter.h"
@@ -177,6 +178,7 @@ void X86CodeGenPassBuilder::addPostRegAlloc(PassManagerWrapper &PMW) const {
 void X86CodeGenPassBuilder::addPreSched2(PassManagerWrapper &PMW) const {
   addMachineFunctionPass(X86ExpandPseudoPass(), PMW);
   addMachineFunctionPass(MachineKCFIPass(), PMW);
+  addMachineFunctionPass(MachineCFGuardCheckExpandPass(), PMW);
 }
 
 void X86CodeGenPassBuilder::addPreEmitPass(PassManagerWrapper &PMW) const {

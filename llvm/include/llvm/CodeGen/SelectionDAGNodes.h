@@ -687,6 +687,7 @@ private:
   };
 
   uint32_t CFIType = 0;
+  bool NeedChainCallToCFGuardTarget = false;
 
 public:
   //===--------------------------------------------------------------------===//
@@ -1112,6 +1113,9 @@ public:
 
   void setCFIType(uint32_t Type) { CFIType = Type; }
   uint32_t getCFIType() const { return CFIType; }
+
+  void setNeedChainCallToCFGuardTarget(bool Flag = true) { NeedChainCallToCFGuardTarget = Flag; }
+  bool getNeedChainCallToCFGuardTarget() const { return NeedChainCallToCFGuardTarget; }
 
   /// Return the number of values defined/returned by this operator.
   unsigned getNumValues() const { return NumValues; }

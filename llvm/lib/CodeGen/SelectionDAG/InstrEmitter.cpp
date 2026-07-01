@@ -1147,6 +1147,9 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
   // Set the CFI type.
   MIB->setCFIType(*MF, Node->getCFIType());
 
+  if (Node->getNeedChainCallToCFGuardTarget())
+    MIB.setMIFlag(MachineInstr::CFGuardMerged);
+
   // Insert the instruction into position in the block. This needs to
   // happen before any custom inserter hook is called so that the
   // hook knows where in the block to insert the replacement code.

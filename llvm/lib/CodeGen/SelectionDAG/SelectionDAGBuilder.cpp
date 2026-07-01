@@ -9278,11 +9278,15 @@ void SelectionDAGBuilder::LowerCallTo(const CallBase &CB, SDValue Callee,
 
   // If call site has a cfguardtarget operand bundle, create and add an
   // additional ArgListEntry.
+  SDValue ChainCallCFGuardTarget;
   if (auto Bundle = CB.getOperandBundle(LLVMContext::OB_cfguardtarget)) {
     Value *V = Bundle->Inputs[0];
     TargetLowering::ArgListEntry Entry(V, getValue(V));
     Entry.IsCFGuardTarget = true;
     Args.push_back(Entry);
+    if (Bundle->Inputs.size() == 2 &&
+        cast<ConstantInt>(Bundle->Inputs[1])->isOne())
+      ChainCallCFGuardTarget = getValue(V);
   }
 
   // Disable tail calls if there is an swifterror argument. Targets have not
@@ -9322,7 +9326,8 @@ void SelectionDAGBuilder::LowerCallTo(const CallBase &CB, SDValue Callee,
           CB.countOperandBundlesOfType(LLVMContext::OB_preallocated) != 0)
       .setCFIType(CFIType)
       .setConvergenceControlToken(ConvControlToken)
-      .setDeactivationSymbol(DeactivationSymbol);
+      .setDeactivationSymbol(DeactivationSymbol)
+      .setChainCallCFGuardTarget(ChainCallCFGuardTarget);
 
   // Set the pointer authentication info if we have it.
   if (PAI) {

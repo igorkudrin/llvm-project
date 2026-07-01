@@ -383,6 +383,8 @@ bool X86ExpandPseudoImpl::expandMI(MachineBasicBlock &MBB,
     MachineInstr &NewMI = *std::prev(MBBI);
     NewMI.copyImplicitOps(*MBBI->getParent()->getParent(), *MBBI);
     NewMI.setCFIType(*MBB.getParent(), MI.getCFIType());
+    if (MI.getFlag(MachineInstr::CFGuardMerged))
+      NewMI.setFlag(MachineInstr::CFGuardMerged);
 
     // Update the call info.
     if (MBBI->isCandidateForAdditionalCallInfo())

@@ -85,6 +85,7 @@ extern "C" LLVM_C_ABI void LLVMInitializeX86Target() {
   initializeX86FastPreTileConfigLegacyPass(PR);
   initializeX86FastTileConfigLegacyPass(PR);
   initializeMachineKCFILegacyPass(PR);
+  initializeMachineCFGuardCheckExpandLegacyPass(PR);
   initializeX86LowerTileCopyLegacyPass(PR);
   initializeX86ExpandPseudoLegacyPass(PR);
   initializeX86ExecutionDomainFixPass(PR);
@@ -552,6 +553,7 @@ void X86PassConfig::addPostRegAlloc() {
 void X86PassConfig::addPreSched2() {
   addPass(createX86ExpandPseudoLegacyPass());
   addPass(createKCFIPass());
+  addPass(createCFGuardCheckExpandPass());
 }
 
 void X86PassConfig::addPreEmitPass() {

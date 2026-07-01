@@ -64730,6 +64730,54 @@ X86TargetLowering::EmitKCFICheck(MachineBasicBlock &MBB,
       .getInstr();
 }
 
+MachineInstr *
+X86TargetLowering::EmitCFGuardCheck(MachineBasicBlock &MBB,
+                                    MachineBasicBlock::instr_iterator &MBBI,
+                                    const TargetInstrInfo *TII) const {
+  assert(MBBI->isCall() && MBBI->getFlag(MachineInstr::CFGuardMerged) &&
+         "Invalid call instruction for EmitCFGuardCheck");
+
+  MachineFunction &MF = *MBB.getParent();
+  switch (MBBI->getOpcode()) {
+  case X86::CALL64m:
+  case X86::CALL64m_NT:
+  case X86::TAILJMPm64:
+  case X86::TAILJMPm64_REX: {
+    MachineInstrBuilder MIB =
+        BuildMI(MBB, MBBI, MIMetadata(*MBBI), TII->get(X86::CALL64m));
+    for (unsigned i = 0, e = MBBI->getNumOperands(); i != e; ++i) {
+      MachineOperand &Op = MBBI->getOperand(i);
+      if (i < X86::AddrNumOperands)
+        MIB.add(Op);
+      else if (Op.isReg() && Op.isImplicit())
+        MIB.addReg(Op.getReg(), getDefRegState(Op.isDef()) |
+                                    RegState::Implicit |
+                                    getKillRegState(Op.isKill()) |
+                                    getDeadRegState(Op.isDead()) |
+                                    getUndefRegState(Op.isUndef()));
+      else
+        MIB.add(Op);
+    }
+    MIB.setMemRefs(MBBI->memoperands());
+    return MIB.getInstr();
+  }
+  case X86::CALL64r:
+  case X86::CALL64r_ImpCall:
+  case X86::CALL64r_NT:
+  case X86::TAILJMPr64:
+  case X86::TAILJMPr64_REX:
+    return BuildMI(MBB, MBBI, MIMetadata(*MBBI), TII->get(X86::CALL64r))
+        .addReg(MBBI->getOperand(0).getReg())
+        .getInstr();
+    break;
+    // TODO: case X86::CALL64pcrel32:
+    // TODO: case X86::TAILJMPd64:
+    break;
+  default:
+    llvm_unreachable("Unexpected CFI call opcode");
+  }
+}
+
 /// Returns true if stack probing through a function call is requested.
 bool X86TargetLowering::hasStackProbeSymbol(const MachineFunction &MF) const {
   return !getStackProbeSymbolName(MF).empty();

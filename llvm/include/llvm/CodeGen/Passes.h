@@ -629,6 +629,9 @@ LLVM_ABI ModulePass *createWindowsSecureHotPatchingPass();
 
 /// Lowers KCFI operand bundles for indirect calls.
 LLVM_ABI FunctionPass *createKCFIPass();
+
+/// TODO: description
+LLVM_ABI FunctionPass *createCFGuardCheckExpandPass();
 } // namespace llvm
 
 #endif

@@ -684,6 +684,10 @@ namespace llvm {
                                 MachineBasicBlock::instr_iterator &MBBI,
                                 const TargetInstrInfo *TII) const override;
 
+    MachineInstr *EmitCFGuardCheck(MachineBasicBlock &MBB,
+                                   MachineBasicBlock::instr_iterator &MBBI,
+                                   const TargetInstrInfo *TII) const override;
+
     bool hasStackProbeSymbol(const MachineFunction &MF) const override;
     bool hasInlineStackProbe(const MachineFunction &MF) const override;
     StringRef getStackProbeSymbolName(const MachineFunction &MF) const override;

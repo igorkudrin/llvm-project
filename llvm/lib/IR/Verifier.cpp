@@ -4008,8 +4008,11 @@ void Verifier::visitCallBase(CallBase &Call) {
       Check(!FoundCFGuardTargetBundle, "Multiple CFGuardTarget operand bundles",
             Call);
       FoundCFGuardTargetBundle = true;
-      Check(BU.Inputs.size() == 1,
-            "Expected exactly one cfguardtarget bundle operand", Call);
+      Check(BU.Inputs.size() == 1 || (BU.Inputs.size() == 2 &&
+                                      BU.Inputs[1]->getType()->isIntegerTy(1)),
+            "Expected one or two cfguardtarget bundle operand;"
+            " 2nd operand must be an i1",
+            Call);
     } else if (Tag == LLVMContext::OB_ptrauth) {
       Check(!FoundPtrauthBundle, "Multiple ptrauth operand bundles", Call);
       FoundPtrauthBundle = true;

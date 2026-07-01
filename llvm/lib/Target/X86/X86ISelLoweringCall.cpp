@@ -2678,6 +2678,9 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
     if (IsCFICall)
       Ret.getNode()->setCFIType(CLI.CFIType->getZExtValue());
 
+    if (CLI.ChainCallCFGuardTarget)
+      Ret.getNode()->setNeedChainCallToCFGuardTarget();
+
     DAG.addNoMergeSiteInfo(Ret.getNode(), CLI.NoMerge);
     DAG.addCallSiteInfo(Ret.getNode(), std::move(CSInfo));
     return Ret;
@@ -2712,6 +2715,8 @@ X86TargetLowering::LowerCall(TargetLowering::CallLoweringInfo &CLI,
 
   if (IsCFICall)
     Chain.getNode()->setCFIType(CLI.CFIType->getZExtValue());
+  if (CLI.ChainCallCFGuardTarget)
+    Chain.getNode()->setNeedChainCallToCFGuardTarget();
 
   InGlue = Chain.getValue(1);
   DAG.addNoMergeSiteInfo(Chain.getNode(), CLI.NoMerge);

@@ -165,6 +165,36 @@ void CFGuardImpl::insertCFGuardCheck(CallBase *CB) {
   IRBuilder<> B(CB);
   Value *CalledOperand = CB->getCalledOperand();
 
+  if (CB->getModule()->getTargetTriple().isX86_64()) {
+    Type *CalledOperandType = CalledOperand->getType();
+
+    // Load the global as a pointer to a function of the same type.
+    LoadInst *GuardCheckLoad =
+        B.CreateLoad(CalledOperandType, GuardFnGlobal);
+
+    // Add the original call target as a cfguardtarget operand bundle.
+    SmallVector<llvm::OperandBundleDef, 1> Bundles;
+    CB->getOperandBundlesAsDefs(Bundles);
+    Value *Ops[] = {CalledOperand, ConstantInt::getTrue(CB->getContext())};
+    Bundles.emplace_back("cfguardtarget", Ops);
+
+    // Create a copy of the call/invoke instruction and add the new bundle.
+    assert((isa<CallInst>(CB) || isa<InvokeInst>(CB)) &&
+           "Unknown indirect call type");
+    CallBase *NewCB = CallBase::Create(CB, Bundles, CB->getIterator());
+
+    // Change the target of the call to be the guard dispatch function.
+    NewCB->setCalledOperand(GuardCheckLoad);
+
+    // Replace the original call/invoke with the new instruction.
+    CB->replaceAllUsesWith(NewCB);
+
+    // Delete the original call/invoke.
+    CB->eraseFromParent();
+
+    return;
+  }
+
   // If the indirect call is called within catchpad or cleanuppad,
   // we need to copy "funclet" bundle of the call.
   SmallVector<llvm::OperandBundleDef, 1> Bundles;
